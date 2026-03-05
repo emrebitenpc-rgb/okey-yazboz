@@ -852,7 +852,7 @@ body::before {
 </div>
 
 <!-- ─── LOGIN SCREEN ─── -->
-<div id="login-screen" class="screen active">
+<div id="login-screen" class="screen">
   <div class="top-bar">
     <div class="logo">101 Okey</div>
   </div>
@@ -1785,9 +1785,10 @@ document.getElementById('dice-modal').addEventListener('click', function(e) {
 
 // Init
 setDiceType(2);
-// Firebase başlat
-if (window.fbInit) window.fbInit();
-else document.addEventListener('DOMContentLoaded', () => { if (window.fbInit) window.fbInit(); });
+// Firebase başlat - tüm scriptler yüklendikten sonra
+window.addEventListener('load', function() {
+  if (window.fbInit) window.fbInit();
+});
 </script>
 </body>
 </html>
