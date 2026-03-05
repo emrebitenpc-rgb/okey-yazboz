@@ -5,109 +5,81 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>101 Okey</title>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <script>
-(function() {
-  // Firebase SDK'yı dinamik olarak yükle
-  function loadScript(src, cb) {
-    var s = document.createElement('script');
-    s.src = src;
-    s.onload = cb;
-    s.onerror = function() { console.error('Script yüklenemedi:', src); };
-    document.head.appendChild(s);
+var FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCPgFPC8ogQuQl3M-QHpj0Kugrk7AI7cfg",
+  authDomain: "okey-yazboz-5d614.firebaseapp.com",
+  projectId: "okey-yazboz-5d614",
+  storageBucket: "okey-yazboz-5d614.firebasestorage.app",
+  messagingSenderId: "899037604994",
+  appId: "1:899037604994:web:9cdcc8cdf5319f61f3d89b"
+};
+var TABLES = {
+  'masa1': { password: 'tokat6060' },
+  'masa2': { password: '6060tokat' }
+};
+firebase.initializeApp(FIREBASE_CONFIG);
+var db = firebase.firestore();
+var currentTable = null;
+var isAdmin = false;
+var unsubscribe = null;
+
+window.fbIsAdmin = function() { return isAdmin; };
+window.fbCurrentTable = function() { return currentTable; };
+
+window.fbInit = function() {
+  var savedTable = sessionStorage.getItem('okey_table');
+  var savedRole = sessionStorage.getItem('okey_role');
+  if (savedTable && savedRole) {
+    isAdmin = (savedRole === 'admin');
+    currentTable = savedTable;
+    var ref = db.collection('tables').doc(savedTable);
+    ref.get().then(function(snap) {
+      if (snap.exists) window.loadStateFromFirebase(snap.data());
+      else { if (isAdmin) show('setup-screen'); else show('viewer-wait-screen'); }
+    });
+    if (unsubscribe) unsubscribe();
+    unsubscribe = ref.onSnapshot(function(snap) {
+      if (snap.exists) window.loadStateFromFirebase(snap.data());
+    });
+  } else {
+    show('login-screen');
   }
+};
 
-  function initFirebase() {
-  var FIREBASE_CONFIG = {
-    apiKey: "AIzaSyCPgFPC8ogQuQl3M-QHpj0Kugrk7AI7cfg",
-    authDomain: "okey-yazboz-5d614.firebaseapp.com",
-    projectId: "okey-yazboz-5d614",
-    storageBucket: "okey-yazboz-5d614.firebasestorage.app",
-    messagingSenderId: "899037604994",
-    appId: "1:899037604994:web:9cdcc8cdf5319f61f3d89b"
-  };
-
-  var TABLES = {
-    'masa1': { password: 'tokat6060', label: 'Masa 1' },
-    'masa2': { password: '6060tokat', label: 'Masa 2' }
-  };
-
-  var app = firebase.initializeApp(FIREBASE_CONFIG);
-  var db = firebase.firestore();
-
-  var currentTable = null;
-  var isAdmin = false;
-  var unsubscribe = null;
-
-  window.fbIsAdmin = function() { return isAdmin; };
-  window.fbCurrentTable = function() { return currentTable; };
-
-  window.fbInit = function() {
-    // Önceki oturum var mı kontrol et
-    var savedTable = sessionStorage.getItem('okey_table');
-    var savedRole = sessionStorage.getItem('okey_role');
-    if (savedTable && savedRole) {
-      var pw = savedRole === 'admin' ? (savedTable === 'masa1' ? 'tokat6060' : '6060tokat') : '';
-      window.fbLogin(savedTable, pw).then(function(result) {
-        if (result === true) {
-          // Başarılı — loadStateFromFirebase zaten ekrana geçirecek
-        } else {
-          sessionStorage.clear();
-          show('login-screen');
-        }
-      });
-    } else {
-      show('login-screen');
-    }
-  };
-
-  window.fbLogin = async function(tableId, password) {
+window.fbLogin = function(tableId, password) {
+  return new Promise(function(resolve) {
     var table = TABLES[tableId];
-    if (!table) return false;
+    if (!table) { resolve(false); return; }
     currentTable = tableId;
-
     if (password === table.password) {
       isAdmin = true;
     } else if (password === '') {
       isAdmin = false;
     } else {
-      return 'wrong_password';
+      resolve('wrong_password'); return;
     }
-
-    // Oturumu kaydet
     sessionStorage.setItem('okey_table', tableId);
     sessionStorage.setItem('okey_role', isAdmin ? 'admin' : 'viewer');
-
-    // Mevcut veriyi yükle
     var ref = db.collection('tables').doc(tableId);
-    var snap = await ref.get();
-    if (snap.exists) {
-      window.loadStateFromFirebase(snap.data());
-    }
-
-    // Gerçek zamanlı dinle
-    if (unsubscribe) unsubscribe();
-    unsubscribe = ref.onSnapshot(function(snap) {
-      if (snap.exists) {
-        window.loadStateFromFirebase(snap.data());
-      }
-    });
-
-    return true;
-  };
-
-  window.fbSaveState = async function(stateData) {
-    if (!isAdmin || !currentTable) return;
-    await db.collection('tables').doc(currentTable).set(stateData);
-  };
-  }
-
-  // Sırayla yükle
-  loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js', function() {
-    loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js', function() {
-      initFirebase();
+    ref.get().then(function(snap) {
+      if (snap.exists) window.loadStateFromFirebase(snap.data());
+      else { if (isAdmin) show('setup-screen'); else show('viewer-wait-screen'); }
+      if (unsubscribe) unsubscribe();
+      unsubscribe = ref.onSnapshot(function(s) {
+        if (s.exists) window.loadStateFromFirebase(s.data());
+      });
+      resolve(true);
     });
   });
-})();
+};
+
+window.fbSaveState = function(stateData) {
+  if (!isAdmin || !currentTable) return;
+  db.collection('tables').doc(currentTable).set(stateData);
+};
 </script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
