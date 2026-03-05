@@ -8,77 +8,99 @@
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <script>
-var FIREBASE_CONFIG = {
+// ── Firebase ──
+firebase.initializeApp({
   apiKey: "AIzaSyCPgFPC8ogQuQl3M-QHpj0Kugrk7AI7cfg",
   authDomain: "okey-yazboz-5d614.firebaseapp.com",
   projectId: "okey-yazboz-5d614",
   storageBucket: "okey-yazboz-5d614.firebasestorage.app",
   messagingSenderId: "899037604994",
   appId: "1:899037604994:web:9cdcc8cdf5319f61f3d89b"
-};
-var TABLES = {
-  'masa1': { password: 'tokat6060' },
-  'masa2': { password: '6060tokat' }
-};
-firebase.initializeApp(FIREBASE_CONFIG);
+});
 var db = firebase.firestore();
+var PASSWORDS = { masa1: 'tokat6060', masa2: '6060tokat' };
 var currentTable = null;
 var isAdmin = false;
-var unsubscribe = null;
+var unsubListener = null;
 
 window.fbIsAdmin = function() { return isAdmin; };
 window.fbCurrentTable = function() { return currentTable; };
+window.fbSaveState = function(data) {
+  if (!isAdmin || !currentTable) return;
+  db.collection('tables').doc(currentTable).set(data).catch(function(e){ console.error('Save error',e); });
+};
+
+function fbSubscribe(tableId) {
+  if (unsubListener) unsubListener();
+  unsubListener = db.collection('tables').doc(tableId).onSnapshot(function(snap) {
+    if (snap.exists) window.loadStateFromFirebase(snap.data());
+  }, function(err){ console.error('Snapshot error', err); });
+}
 
 window.fbInit = function() {
-  var savedTable = sessionStorage.getItem('okey_table');
-  var savedRole = sessionStorage.getItem('okey_role');
-  if (savedTable && savedRole) {
-    isAdmin = (savedRole === 'admin');
-    currentTable = savedTable;
-    var ref = db.collection('tables').doc(savedTable);
-    ref.get().then(function(snap) {
-      if (snap.exists) window.loadStateFromFirebase(snap.data());
-      else { if (isAdmin) show('setup-screen'); else show('viewer-wait-screen'); }
+  var params = new URLSearchParams(window.location.search);
+  var adminParam = params.get('admin'); // masa1 veya masa2
+  var viewerParam = params.get('masa'); // 1 veya 2
+
+  if (adminParam && PASSWORDS[adminParam]) {
+    // Yönetici linki: ?admin=masa1
+    // Cookie'de şifre onaylanmış mı bak
+    var approved = localStorage.getItem('admin_approved_' + adminParam);
+    if (approved === '1') {
+      // Direkt giriş
+      currentTable = adminParam;
+      isAdmin = true;
+      fbSubscribe(adminParam);
+      db.collection('tables').doc(adminParam).get().then(function(snap) {
+        if (snap.exists && snap.data().players && snap.data().players.length > 0) {
+          window.loadStateFromFirebase(snap.data());
+        } else {
+          show('setup-screen');
+        }
+      });
+    } else {
+      // Şifre sor
+      show('login-screen');
+      document.getElementById('login-target-table').value = adminParam;
+    }
+  } else if (viewerParam) {
+    // İzleyici linki: ?masa=1
+    var tableId = 'masa' + viewerParam;
+    currentTable = tableId;
+    isAdmin = false;
+    db.collection('tables').doc(tableId).get().then(function(snap) {
+      if (snap.exists && snap.data().players && snap.data().players.length > 0) {
+        window.loadStateFromFirebase(snap.data());
+      } else {
+        show('viewer-wait-screen');
+      }
     });
-    if (unsubscribe) unsubscribe();
-    unsubscribe = ref.onSnapshot(function(snap) {
-      if (snap.exists) window.loadStateFromFirebase(snap.data());
-    });
+    fbSubscribe(tableId);
   } else {
+    // Parametresiz - admin giriş ekranı göster
     show('login-screen');
   }
 };
 
-window.fbLogin = function(tableId, password) {
-  return new Promise(function(resolve) {
-    var table = TABLES[tableId];
-    if (!table) { resolve(false); return; }
+window.fbAdminLogin = function() {
+  var tableId = document.getElementById('login-target-table').value || 'masa1';
+  var pw = document.getElementById('login-password').value;
+  if (pw === PASSWORDS[tableId]) {
+    localStorage.setItem('admin_approved_' + tableId, '1');
     currentTable = tableId;
-    if (password === table.password) {
-      isAdmin = true;
-    } else if (password === '') {
-      isAdmin = false;
-    } else {
-      resolve('wrong_password'); return;
-    }
-    sessionStorage.setItem('okey_table', tableId);
-    sessionStorage.setItem('okey_role', isAdmin ? 'admin' : 'viewer');
-    var ref = db.collection('tables').doc(tableId);
-    ref.get().then(function(snap) {
-      if (snap.exists) window.loadStateFromFirebase(snap.data());
-      else { if (isAdmin) show('setup-screen'); else show('viewer-wait-screen'); }
-      if (unsubscribe) unsubscribe();
-      unsubscribe = ref.onSnapshot(function(s) {
-        if (s.exists) window.loadStateFromFirebase(s.data());
-      });
-      resolve(true);
+    isAdmin = true;
+    document.getElementById('login-error').style.display = 'none';
+    fbSubscribe(tableId);
+    db.collection('tables').doc(tableId).get().then(function(snap) {
+      if (snap.exists && snap.data().players && snap.data().players.length > 0) {
+        window.loadStateFromFirebase(snap.data());
+      } else {
+        show('setup-screen');
+      }
     });
-  });
-};
-
-window.fbSaveState = function(stateData) {
-  if (!isAdmin || !currentTable) return;
-  db.collection('tables').doc(currentTable).set(stateData);
+  } else {
+    document.getElementById('login-error').style.display = 'block';
+  }
 };
 </script>
 <style>
@@ -857,25 +879,15 @@ body::before {
     <div class="logo">101 Okey</div>
   </div>
   <div class="card">
-    <div class="card-label">Masa Seç</div>
-    <div class="mode-tabs" style="margin-bottom:18px">
-      <button class="tab-btn active" id="lt-masa1" onclick="selectLoginTable('masa1')">Masa 1</button>
-      <button class="tab-btn" id="lt-masa2" onclick="selectLoginTable('masa2')">Masa 2</button>
+    <div class="card-label" style="margin-bottom:12px">Yönetici Girişi</div>
+    <input type="hidden" id="login-target-table" value="masa1">
+    <div class="p-input-wrap">
+      <span class="p-num">🔑</span>
+      <input type="password" id="login-password" placeholder="Şifre" style="flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:DM Sans,sans-serif;font-size:14px" onkeydown="if(event.key==='Enter')window.fbAdminLogin()">
     </div>
-    <div class="card-label">Giriş Türü</div>
-    <div class="mode-tabs" style="margin-bottom:18px">
-      <button class="tab-btn active" id="lt-izleyici" onclick="selectLoginType('izleyici')">İzleyici</button>
-      <button class="tab-btn" id="lt-yonetici" onclick="selectLoginType('yonetici')">Yönetici</button>
-    </div>
-    <div id="password-field" style="display:none;margin-bottom:12px">
-      <div class="p-input-wrap">
-        <span class="p-num">🔑</span>
-        <input type="password" id="login-password" placeholder="Şifre" style="flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:DM Sans,sans-serif;font-size:14px">
-      </div>
-    </div>
-    <div id="login-error" style="color:var(--red);font-size:13px;text-align:center;margin-bottom:8px;display:none">Şifre hatalı!</div>
+    <div id="login-error" style="color:var(--red);font-size:13px;text-align:center;margin-top:8px;display:none">Şifre hatalı!</div>
   </div>
-  <button class="start-btn" onclick="doLogin()">Giriş Yap →</button>
+  <button class="start-btn" onclick="window.fbAdminLogin()">Giriş Yap →</button>
 </div>
 
 <!-- ─── SETUP SCREEN ─── -->
@@ -1061,40 +1073,6 @@ body::before {
 
 <script>
 // ─── LOGIN ───
-let loginTable = 'masa1';
-let loginType = 'izleyici';
-
-function selectLoginTable(t) {
-  loginTable = t;
-  document.getElementById('lt-masa1').classList.toggle('active', t === 'masa1');
-  document.getElementById('lt-masa2').classList.toggle('active', t === 'masa2');
-}
-
-function selectLoginType(t) {
-  loginType = t;
-  document.getElementById('lt-izleyici').classList.toggle('active', t === 'izleyici');
-  document.getElementById('lt-yonetici').classList.toggle('active', t === 'yonetici');
-  document.getElementById('password-field').style.display = t === 'yonetici' ? 'block' : 'none';
-}
-
-async function doLogin() {
-  const password = loginType === 'yonetici' ? document.getElementById('login-password').value : '';
-  const result = await window.fbLogin(loginTable, password);
-  if (result === 'wrong_password') {
-    document.getElementById('login-error').style.display = 'block';
-    return;
-  }
-  document.getElementById('login-error').style.display = 'none';
-  const isAdmin = window.fbIsAdmin();
-
-  // Eğer admin ise setup'a git, değilse direkt game'e (masa verisi varsa)
-  if (isAdmin) {
-    show('setup-screen');
-  } else {
-    // İzleyici: oyun başlamışsa göster, yoksa bekle
-    showViewerMode();
-  }
-}
 
 function showViewerMode() {
   // state boşsa bekleme ekranı göster - yine de dinlemeye devam et
@@ -1137,32 +1115,15 @@ window.loadStateFromFirebase = function(data) {
   state.finished = data.finished || false;
   penIdCounter = data.penIdCounter || 0;
 
-  const currentScreen = document.querySelector('.screen.active');
-  const screenId = currentScreen ? currentScreen.id : '';
+  var screenId = (document.querySelector('.screen.active') || {}).id || '';
+  var admin = window.fbIsAdmin && window.fbIsAdmin();
 
-  if (screenId === 'viewer-wait-screen' || screenId === 'login-screen') {
-    if (window.fbIsAdmin && window.fbIsAdmin()) {
-      applyAdminUI();
-      if (state.players && state.players.length > 0) {
-        buildGameUI();
-        show('game-screen');
-      } else {
-        show('setup-screen');
-      }
-    } else {
-      applyViewerUI();
-      buildGameUI();
-      show('game-screen');
-    }
-  } else if (screenId === 'game-screen') {
+  if (state.players && state.players.length > 0) {
+    if (admin) applyAdminUI(); else applyViewerUI();
     buildGameUI();
-  } else if (screenId === 'setup-screen') {
-    // Admin setup ekranındayken veri gelirse oyun devam ediyorsa game'e geç
-    if (state.players && state.players.length > 0 && !state.finished) {
-      applyAdminUI();
-      buildGameUI();
-      show('game-screen');
-    }
+    if (screenId !== 'game-screen') show('game-screen');
+  } else {
+    if (admin) show('setup-screen'); else show('viewer-wait-screen');
   }
 };
 
@@ -1785,10 +1746,7 @@ document.getElementById('dice-modal').addEventListener('click', function(e) {
 
 // Init
 setDiceType(2);
-// Firebase başlat - tüm scriptler yüklendikten sonra
-window.addEventListener('load', function() {
-  if (window.fbInit) window.fbInit();
-});
+window.addEventListener('load', function() { window.fbInit(); });
 </script>
 </body>
 </html>
