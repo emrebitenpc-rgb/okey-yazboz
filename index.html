@@ -8,7 +8,9 @@
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <script>
-// ── Firebase ──
+var _fbReady = false;
+var _pendingInit = false;
+
 firebase.initializeApp({
   apiKey: "AIzaSyCPgFPC8ogQuQl3M-QHpj0Kugrk7AI7cfg",
   authDomain: "okey-yazboz-5d614.firebaseapp.com",
@@ -18,78 +20,72 @@ firebase.initializeApp({
   appId: "1:899037604994:web:9cdcc8cdf5319f61f3d89b"
 });
 var db = firebase.firestore();
+window.db = db;
 var PASSWORDS = { masa1: 'tokat6060', masa2: '6060tokat' };
-var currentTable = null;
-var isAdmin = false;
-var unsubListener = null;
+var _currentTable = null;
+var _isAdmin = false;
+var _unsubscribe = null;
 
-window.fbIsAdmin = function() { return isAdmin; };
-window.fbCurrentTable = function() { return currentTable; };
+window.fbIsAdmin = function() { return _isAdmin; };
+window.fbCurrentTable = function() { return _currentTable; };
+
 window.fbSaveState = function(data) {
-  if (!isAdmin || !currentTable) return;
-  db.collection('tables').doc(currentTable).set(data).catch(function(e){ console.error('Save error',e); });
+  if (!_isAdmin || !_currentTable) return;
+  db.collection('tables').doc(_currentTable).set(data);
 };
 
 function fbSubscribe(tableId) {
-  if (unsubListener) unsubListener();
-  unsubListener = db.collection('tables').doc(tableId).onSnapshot(function(snap) {
+  if (_unsubscribe) _unsubscribe();
+  _unsubscribe = db.collection('tables').doc(tableId).onSnapshot(function(snap) {
     if (snap.exists) window.loadStateFromFirebase(snap.data());
-  }, function(err){ console.error('Snapshot error', err); });
+  });
 }
 
-window.fbInit = function() {
-  var params = new URLSearchParams(window.location.search);
-  var adminParam = params.get('admin'); // masa1 veya masa2
-  var viewerParam = params.get('masa'); // 1 veya 2
-
-  if (adminParam && PASSWORDS[adminParam]) {
-    // Yönetici linki: ?admin=masa1
-    // Cookie'de şifre onaylanmış mı bak
-    var approved = localStorage.getItem('admin_approved_' + adminParam);
-    if (approved === '1') {
-      // Direkt giriş
-      currentTable = adminParam;
-      isAdmin = true;
-      fbSubscribe(adminParam);
-      db.collection('tables').doc(adminParam).get().then(function(snap) {
-        if (snap.exists && snap.data().players && snap.data().players.length > 0) {
-          window.loadStateFromFirebase(snap.data());
-        } else {
-          show('setup-screen');
-        }
-      });
-    } else {
-      // Şifre sor
-      show('login-screen');
-      document.getElementById('login-target-table').value = adminParam;
-    }
-  } else if (viewerParam) {
-    // İzleyici linki: ?masa=1
-    var tableId = 'masa' + viewerParam;
-    currentTable = tableId;
-    isAdmin = false;
+// Ana sayfa: her iki masanın durumunu çek ve göster
+function showHomePage() {
+  show('home-screen');
+  ['masa1','masa2'].forEach(function(tableId, idx) {
+    var label = idx === 0 ? 'Masa 1' : 'Masa 2';
+    var statusEl = document.getElementById('home-status-' + tableId);
+    if (statusEl) statusEl.textContent = 'Yükleniyor...';
     db.collection('tables').doc(tableId).get().then(function(snap) {
+      if (!statusEl) return;
       if (snap.exists && snap.data().players && snap.data().players.length > 0) {
-        window.loadStateFromFirebase(snap.data());
+        var d = snap.data();
+        var players = d.players.join(', ');
+        var round = d.currentRound || 1;
+        var total = d.totalRounds || '?';
+        statusEl.innerHTML = '<span style="color:var(--green)">● Oyun Devam Ediyor</span><br><small style="color:var(--muted)">' + players + '</small><br><small style="color:var(--muted)">' + round + '. El</small>';
       } else {
-        show('viewer-wait-screen');
+        statusEl.innerHTML = '<span style="color:var(--muted)">Oyun Yok</span>';
       }
     });
-    fbSubscribe(tableId);
-  } else {
-    // Parametresiz - admin giriş ekranı göster
-    show('login-screen');
-  }
+  });
+}
+
+// İzleyici olarak masaya bağlan
+window.fbWatchTable = function(tableId) {
+  _currentTable = tableId;
+  _isAdmin = false;
+  db.collection('tables').doc(tableId).get().then(function(snap) {
+    if (snap.exists && snap.data().players && snap.data().players.length > 0) {
+      window.loadStateFromFirebase(snap.data());
+    } else {
+      show('viewer-wait-screen');
+    }
+  });
+  fbSubscribe(tableId);
 };
 
-window.fbAdminLogin = function() {
-  var tableId = document.getElementById('login-target-table').value || 'masa1';
-  var pw = document.getElementById('login-password').value;
-  if (pw === PASSWORDS[tableId]) {
-    localStorage.setItem('admin_approved_' + tableId, '1');
-    currentTable = tableId;
-    isAdmin = true;
-    document.getElementById('login-error').style.display = 'none';
+// Yönetici girişi
+window.fbAdminLogin = function(tableId) {
+  var pw = document.getElementById('admin-password') ? document.getElementById('admin-password').value : '';
+  if (pw === PASSWORDS[tableId] || localStorage.getItem('admin_' + tableId) === '1') {
+    localStorage.setItem('admin_' + tableId, '1');
+    _currentTable = tableId;
+    _isAdmin = true;
+    var errEl = document.getElementById('admin-login-error');
+    if (errEl) errEl.style.display = 'none';
     fbSubscribe(tableId);
     db.collection('tables').doc(tableId).get().then(function(snap) {
       if (snap.exists && snap.data().players && snap.data().players.length > 0) {
@@ -99,9 +95,45 @@ window.fbAdminLogin = function() {
       }
     });
   } else {
-    document.getElementById('login-error').style.display = 'block';
+    var errEl = document.getElementById('admin-login-error');
+    if (errEl) errEl.style.display = 'block';
   }
 };
+
+// Sayfa yüklenince
+window.addEventListener('load', function() {
+  // Daha önce onaylanmış admin oturumu var mı?
+  var savedAdmin = localStorage.getItem('admin_masa1') ? 'masa1' : (localStorage.getItem('admin_masa2') ? 'masa2' : null);
+  
+  // URL parametresi var mı?
+  var params = new URLSearchParams(window.location.search);
+  var adminParam = params.get('admin');
+  var masaParam = params.get('masa');
+
+  if (adminParam && PASSWORDS[adminParam]) {
+    if (localStorage.getItem('admin_' + adminParam) === '1') {
+      _currentTable = adminParam;
+      _isAdmin = true;
+      fbSubscribe(adminParam);
+      db.collection('tables').doc(adminParam).get().then(function(snap) {
+        if (snap.exists && snap.data().players && snap.data().players.length > 0) {
+          window.loadStateFromFirebase(snap.data());
+        } else {
+          show('setup-screen');
+        }
+      });
+    } else {
+      // Şifre gerekli
+      document.getElementById('admin-login-target').value = adminParam;
+      document.getElementById('admin-login-title').textContent = (adminParam === 'masa1' ? 'Masa 1' : 'Masa 2') + ' Yönetici Girişi';
+      show('admin-login-screen');
+    }
+  } else if (masaParam) {
+    window.fbWatchTable('masa' + masaParam);
+  } else {
+    showHomePage();
+  }
+});
 </script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -865,7 +897,12 @@ body::before {
 
 <!-- ─── VIEWER WAIT SCREEN ─── -->
 <div id="viewer-wait-screen" class="screen">
-  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:80vh;gap:16px">
+  <div class="top-bar">
+    <button class="icon-btn" onclick="showHomePage()">←</button>
+    <div class="logo" style="font-size:24px">101 Okey</div>
+    <div style="width:40px"></div>
+  </div>
+  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:16px">
     <div style="font-size:48px">⏳</div>
     <div style="font-family:'Bebas Neue',cursive;font-size:28px;color:var(--accent)">Oyun Bekleniyor</div>
     <div style="color:var(--muted);font-size:14px;text-align:center">Yönetici oyunu başlattığında<br>skorlar burada görünecek</div>
@@ -873,21 +910,64 @@ body::before {
   </div>
 </div>
 
-<!-- ─── LOGIN SCREEN ─── -->
-<div id="login-screen" class="screen">
+<!-- ─── HOME SCREEN ─── -->
+<div id="home-screen" class="screen">
   <div class="top-bar">
     <div class="logo">101 Okey</div>
   </div>
-  <div class="card">
+
+  <!-- Masa 1 -->
+  <div class="card" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-family:'Bebas Neue',cursive;font-size:22px;color:var(--p0)">Masa 1</div>
+    </div>
+    <div id="home-status-masa1" style="font-size:13px;line-height:1.8;margin-bottom:14px">Yükleniyor...</div>
+    <button class="start-btn" style="padding:12px;font-size:14px" onclick="window.fbWatchTable('masa1')">İzle →</button>
+  </div>
+
+  <!-- Masa 2 -->
+  <div class="card" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-family:'Bebas Neue',cursive;font-size:22px;color:var(--p1)">Masa 2</div>
+    </div>
+    <div id="home-status-masa2" style="font-size:13px;line-height:1.8;margin-bottom:14px">Yükleniyor...</div>
+    <button class="start-btn" style="padding:12px;font-size:14px;background:var(--p1)" onclick="window.fbWatchTable('masa2')">İzle →</button>
+  </div>
+
+  <!-- Yönetici Girişi -->
+  <div class="card" style="margin-top:8px">
     <div class="card-label" style="margin-bottom:12px">Yönetici Girişi</div>
-    <input type="hidden" id="login-target-table" value="masa1">
+    <div class="mode-tabs" style="margin-bottom:14px" id="admin-table-tabs">
+      <button class="tab-btn active" onclick="selectAdminTable('masa1')">Masa 1</button>
+      <button class="tab-btn" onclick="selectAdminTable('masa2')">Masa 2</button>
+    </div>
+    <input type="hidden" id="admin-table-select" value="masa1">
+    <div class="p-input-wrap" style="margin-bottom:8px">
+      <span class="p-num">🔑</span>
+      <input type="password" id="admin-password" placeholder="Şifre" style="flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:DM Sans,sans-serif;font-size:14px" onkeydown="if(event.key==='Enter')doAdminLogin()">
+    </div>
+    <div id="admin-login-error" style="color:var(--red);font-size:13px;text-align:center;margin-bottom:8px;display:none">Şifre hatalı!</div>
+    <button class="start-btn" style="padding:12px;font-size:14px" onclick="doAdminLogin()">Yönetici Girişi →</button>
+  </div>
+</div>
+
+<!-- ─── ADMIN LOGIN SCREEN (URL parametreli) ─── -->
+<div id="admin-login-screen" class="screen">
+  <div class="top-bar"><div class="logo">101 Okey</div></div>
+  <div class="card">
+    <div class="card-label" id="admin-login-title" style="margin-bottom:12px">Yönetici Girişi</div>
+    <input type="hidden" id="admin-login-target" value="masa1">
     <div class="p-input-wrap">
       <span class="p-num">🔑</span>
-      <input type="password" id="login-password" placeholder="Şifre" style="flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:DM Sans,sans-serif;font-size:14px" onkeydown="if(event.key==='Enter')window.fbAdminLogin()">
+      <input type="password" id="admin-login-pw" placeholder="Şifre" style="flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:DM Sans,sans-serif;font-size:14px">
     </div>
-    <div id="login-error" style="color:var(--red);font-size:13px;text-align:center;margin-top:8px;display:none">Şifre hatalı!</div>
+    <div id="admin-login-error2" style="color:var(--red);font-size:13px;text-align:center;margin-top:8px;display:none">Şifre hatalı!</div>
   </div>
-  <button class="start-btn" onclick="window.fbAdminLogin()">Giriş Yap →</button>
+  <button class="start-btn" onclick="doUrlAdminLogin()">Giriş Yap →</button>
+</div>
+
+<!-- ─── LOGIN SCREEN (eski, artık kullanılmıyor) ─── -->
+<div id="login-screen" class="screen">
 </div>
 
 <!-- ─── SETUP SCREEN ─── -->
@@ -1073,6 +1153,52 @@ body::before {
 
 <script>
 // ─── LOGIN ───
+function selectAdminTable(t) {
+  document.getElementById('admin-table-select').value = t;
+  var tabs = document.getElementById('admin-table-tabs').querySelectorAll('.tab-btn');
+  tabs[0].classList.toggle('active', t === 'masa1');
+  tabs[1].classList.toggle('active', t === 'masa2');
+}
+
+function doAdminLogin() {
+  var tableId = document.getElementById('admin-table-select').value;
+  var pw = document.getElementById('admin-password').value;
+  window.fbAdminLogin(tableId);
+}
+
+function doUrlAdminLogin() {
+  var tableId = document.getElementById('admin-login-target').value;
+  var pw = document.getElementById('admin-login-pw').value;
+  var PASSWORDS = { masa1: 'tokat6060', masa2: '6060tokat' };
+  if (pw === PASSWORDS[tableId]) {
+    localStorage.setItem('admin_' + tableId, '1');
+    window._currentTable = tableId;
+    window._isAdmin = true;
+    document.getElementById('admin-login-error2').style.display = 'none';
+    window.fbAdminLogin(tableId);
+  } else {
+    document.getElementById('admin-login-error2').style.display = 'block';
+  }
+}
+
+function showHomePage() {
+  show('home-screen');
+  ['masa1','masa2'].forEach(function(tableId) {
+    var statusEl = document.getElementById('home-status-' + tableId);
+    if (!statusEl) return;
+    statusEl.textContent = 'Yükleniyor...';
+    if (window.db) {
+      window.db.collection('tables').doc(tableId).get().then(function(snap) {
+        if (snap.exists && snap.data().players && snap.data().players.length > 0) {
+          var d = snap.data();
+          statusEl.innerHTML = '<span style="color:var(--green)">● Oyun Devam Ediyor</span><br><small style="color:var(--muted)">' + d.players.join(', ') + ' — ' + (d.currentRound||1) + '. El</small>';
+        } else {
+          statusEl.innerHTML = '<span style="color:var(--muted)">Oyun Yok</span>';
+        }
+      });
+    }
+  });
+}
 
 function showViewerMode() {
   // state boşsa bekleme ekranı göster - yine de dinlemeye devam et
@@ -1123,7 +1249,9 @@ window.loadStateFromFirebase = function(data) {
     buildGameUI();
     if (screenId !== 'game-screen') show('game-screen');
   } else {
-    if (admin) show('setup-screen'); else show('viewer-wait-screen');
+    if (screenId === 'game-screen') {
+      if (admin) show('setup-screen'); else show('viewer-wait-screen');
+    }
   }
 };
 
@@ -1718,21 +1846,15 @@ function goSetup() {
   if (window.fbIsAdmin && window.fbIsAdmin()) {
     show('setup-screen');
   } else {
-    sessionStorage.clear();
-    show('login-screen');
+    showHomePage();
   }
-}
-
-function logout() {
-  sessionStorage.clear();
-  location.reload();
 }
 
 function newGame() {
   if (window.fbIsAdmin && window.fbIsAdmin()) {
     show('setup-screen');
   } else {
-    show('login-screen');
+    showHomePage();
   }
 }
 
@@ -1746,7 +1868,6 @@ document.getElementById('dice-modal').addEventListener('click', function(e) {
 
 // Init
 setDiceType(2);
-window.addEventListener('load', function() { window.fbInit(); });
 </script>
 </body>
 </html>
