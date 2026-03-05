@@ -42,27 +42,6 @@ function fbSubscribe(tableId) {
 }
 
 // Ana sayfa: her iki masanın durumunu çek ve göster
-function showHomePage() {
-  show('home-screen');
-  ['masa1','masa2'].forEach(function(tableId, idx) {
-    var label = idx === 0 ? 'Masa 1' : 'Masa 2';
-    var statusEl = document.getElementById('home-status-' + tableId);
-    if (statusEl) statusEl.textContent = 'Yükleniyor...';
-    db.collection('tables').doc(tableId).get().then(function(snap) {
-      if (!statusEl) return;
-      if (snap.exists && snap.data().players && snap.data().players.length > 0) {
-        var d = snap.data();
-        var players = d.players.join(', ');
-        var round = d.currentRound || 1;
-        var total = d.totalRounds || '?';
-        statusEl.innerHTML = '<span style="color:var(--green)">● Oyun Devam Ediyor</span><br><small style="color:var(--muted)">' + players + '</small><br><small style="color:var(--muted)">' + round + '. El</small>';
-      } else {
-        statusEl.innerHTML = '<span style="color:var(--muted)">Oyun Yok</span>';
-      }
-    });
-  });
-}
-
 // İzleyici olarak masaya bağlan
 window.fbWatchTable = function(tableId) {
   _currentTable = tableId;
@@ -70,9 +49,8 @@ window.fbWatchTable = function(tableId) {
   db.collection('tables').doc(tableId).get().then(function(snap) {
     if (snap.exists && snap.data().players && snap.data().players.length > 0) {
       window.loadStateFromFirebase(snap.data());
-    } else {
-      show('viewer-wait-screen');
     }
+    // Oyun yoksa zaten ana sayfadayız, bir şey yapma
   });
   fbSubscribe(tableId);
 };
@@ -101,11 +79,8 @@ window.fbAdminLogin = function(tableId) {
 };
 
 // Sayfa yüklenince
-window.addEventListener('load', function() {
-  // Daha önce onaylanmış admin oturumu var mı?
-  var savedAdmin = localStorage.getItem('admin_masa1') ? 'masa1' : (localStorage.getItem('admin_masa2') ? 'masa2' : null);
-  
-  // URL parametresi var mı?
+// fbStart: tüm JS yüklendikten sonra çağrılacak
+window._fbStart = function() {
   var params = new URLSearchParams(window.location.search);
   var adminParam = params.get('admin');
   var masaParam = params.get('masa');
@@ -123,7 +98,6 @@ window.addEventListener('load', function() {
         }
       });
     } else {
-      // Şifre gerekli
       document.getElementById('admin-login-target').value = adminParam;
       document.getElementById('admin-login-title').textContent = (adminParam === 'masa1' ? 'Masa 1' : 'Masa 2') + ' Yönetici Girişi';
       show('admin-login-screen');
@@ -133,7 +107,7 @@ window.addEventListener('load', function() {
   } else {
     showHomePage();
   }
-});
+};
 </script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -895,11 +869,6 @@ body::before {
 <body>
 <div class="wrap">
 
-<!-- ─── VIEWER WAIT SCREEN ─── -->
-<div id="viewer-wait-screen" class="screen">
-  <div class="top-bar">
-    <button class="icon-btn" onclick="showHomePage()">←</button>
-    <div class="logo" style="font-size:24px">101 Okey</div>
     <div style="width:40px"></div>
   </div>
   <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:16px">
@@ -922,7 +891,7 @@ body::before {
       <div style="font-family:'Bebas Neue',cursive;font-size:22px;color:var(--p0)">Masa 1</div>
     </div>
     <div id="home-status-masa1" style="font-size:13px;line-height:1.8;margin-bottom:14px">Yükleniyor...</div>
-    <button class="start-btn" style="padding:12px;font-size:14px" onclick="window.fbWatchTable('masa1')">İzle →</button>
+    <div id="home-watch-masa1"><button class="start-btn" style="padding:12px;font-size:14px;opacity:0.3" disabled>Oyun Yok</button></div>
   </div>
 
   <!-- Masa 2 -->
@@ -931,7 +900,7 @@ body::before {
       <div style="font-family:'Bebas Neue',cursive;font-size:22px;color:var(--p1)">Masa 2</div>
     </div>
     <div id="home-status-masa2" style="font-size:13px;line-height:1.8;margin-bottom:14px">Yükleniyor...</div>
-    <button class="start-btn" style="padding:12px;font-size:14px;background:var(--p1)" onclick="window.fbWatchTable('masa2')">İzle →</button>
+    <div id="home-watch-masa2"><button class="start-btn" style="padding:12px;font-size:14px;background:var(--p1);opacity:0.3" disabled>Oyun Yok</button></div>
   </div>
 
   <!-- Yönetici Girişi -->
@@ -1185,25 +1154,44 @@ function showHomePage() {
   show('home-screen');
   ['masa1','masa2'].forEach(function(tableId) {
     var statusEl = document.getElementById('home-status-' + tableId);
+    var watchEl = document.getElementById('home-watch-' + tableId);
+    var color = tableId === 'masa1' ? 'var(--p0)' : 'var(--p1)';
     if (!statusEl) return;
     statusEl.textContent = 'Yükleniyor...';
-    if (window.db) {
-      window.db.collection('tables').doc(tableId).get().then(function(snap) {
-        if (snap.exists && snap.data().players && snap.data().players.length > 0) {
-          var d = snap.data();
-          statusEl.innerHTML = '<span style="color:var(--green)">● Oyun Devam Ediyor</span><br><small style="color:var(--muted)">' + d.players.join(', ') + ' — ' + (d.currentRound||1) + '. El</small>';
-        } else {
-          statusEl.innerHTML = '<span style="color:var(--muted)">Oyun Yok</span>';
+    if (!window.db) return;
+    window.db.collection('tables').doc(tableId).get().then(function(snap) {
+      if (snap.exists && snap.data().players && snap.data().players.length > 0) {
+        var d = snap.data();
+        statusEl.innerHTML = '<span style="color:var(--green)">● Oyun Devam Ediyor</span><br><small style="color:var(--muted)">' + d.players.join(', ') + ' — ' + (d.currentRound||1) + '. El</small>';
+        if (watchEl) {
+          var btn = document.createElement('button');
+          btn.className = 'start-btn';
+          btn.style.cssText = 'padding:12px;font-size:14px;background:' + color + ';width:100%';
+          btn.textContent = 'İzle →';
+          btn.onclick = function() { window.fbWatchTable(tableId); };
+          watchEl.innerHTML = '';
+          watchEl.appendChild(btn);
         }
-      });
-    }
+      } else {
+        statusEl.innerHTML = '<span style="color:var(--muted)">Oyun Yok</span>';
+        if (watchEl) {
+          var btn = document.createElement('button');
+          btn.className = 'start-btn';
+          btn.style.cssText = 'padding:12px;font-size:14px;opacity:0.3;background:' + color + ';width:100%';
+          btn.textContent = 'Oyun Yok';
+          btn.disabled = true;
+          watchEl.innerHTML = '';
+          watchEl.appendChild(btn);
+        }
+      }
+    });
   });
 }
 
 function showViewerMode() {
   // state boşsa bekleme ekranı göster - yine de dinlemeye devam et
   if (!state.players || state.players.length === 0) {
-    show('viewer-wait-screen');
+    showHomePage();
     return;
   }
   applyViewerUI();
@@ -1250,7 +1238,7 @@ window.loadStateFromFirebase = function(data) {
     if (screenId !== 'game-screen') show('game-screen');
   } else {
     if (screenId === 'game-screen') {
-      if (admin) show('setup-screen'); else show('viewer-wait-screen');
+      if (admin) show('setup-screen'); else showHomePage();
     }
   }
 };
@@ -1868,6 +1856,7 @@ document.getElementById('dice-modal').addEventListener('click', function(e) {
 
 // Init
 setDiceType(2);
+window._fbStart();
 </script>
 </body>
 </html>
